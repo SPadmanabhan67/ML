@@ -1,0 +1,101 @@
+---
+title: "Machine Learning"
+author: "SP"
+date: "Saturday, January 24, 2015"
+output: html_document
+---
+
+This project analyzes the Weight Lifting Exercises Dataset available at http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises.
+The goal is to study effectiveness of exercise based on data from human activity recognition devices. We take the training data set, run through a basic exploratory data analysis, data clean up, pre-processing before positioning to run using machine learning algorithms.
+
+**Load and explore**
+```{r echo=TRUE}
+require(corrplot)
+require(caret)
+require(lubridate)
+
+training=read.csv("pml-training.csv", header=TRUE)
+test = read.csv("pml-testing.csv", header=TRUE)
+head(str(training))
+```
+With several variables having NAs, we need to trim the variables down first to what probably matters most. 
+
+After some analysis of this dataset, i make a few assumptions and conclusions:
+1. It suffices to use hour of the day exercised on not the exact time
+2. Who did the exercise is less important to study how well exercise is done and predict for other test sets. So, i drop user_name
+3. Most of the min, max, avg, stddev, kurtosis, skewness, var columns are derived statistical measures. I would choose to keep the "raw" fields
+4. Get rid of all columns with too many NAs or having very low variance
+5. Check on the correlation matrix of those numeric columns as a sanity check and see if some may be dropped
+
+
+```{r echo=TRUE}
+set.seed(1234)
+training$raw_timestamp_part_1 = NULL; training$raw_timestamp_part_2 = NULL; training$X = NULL ; 
+training$user_name = NULL
+training$cvtd_timestamp = strptime(training$cvtd_timestamp, '%d/%m/%Y %H:%M')
+training$cvtd_timestamp = hour(training$cvtd_timestamp)
+training$cvtd_timestamp = as.factor(training$cvtd_timestamp)
+training=training[-grep('min', names(training))]
+training=training[-grep('max', names(training))]
+training=training[-grep('avg', names(training))]
+training=training[-grep('stddev', names(training))]
+training=training[-grep('var', names(training))]
+training=training[-grep('amplitude', names(training))]
+training=training[-grep('kurtosis', names(training))]
+training=training[-grep('skewness', names(training))]
+nzvar = nearZeroVar(training)
+training = training[, -nzvar]
+```
+
+**Checking correlations **
+
+Lets check a correlation matrix plot on the numerics of interest
+```{r echo=TRUE, fig.width=5, fig.height=10}
+trainCor = training[, sapply(training, is.numeric)]
+corrplot(cor(trainCor), type="lower")
+```
+We may check which of the predictors are well correlated for later verifications post machine learning run.
+
+```{r echo=TRUE}
+M <- abs(cor(trainCor))
+which(M > 0.8, arr.ind=TRUE)
+nrow(which(M > 0.8, arr.ind=T))
+```
+
+By this time, we have eliminated and reduced the dataset to only those predictors that have reasonable say on the outcome.
+
+**Prediction Model**
+
+I am choosing random forest in the caret package to train and test on the data provided. 
+
+Random forest specifically for its ability to deliver accurate predictions and on large data sets with multiple variablees. We have 50+ at hand on several thousand rows to learn from. I used a 10 fold cross validation passed to the train control parameter as below for the random forest run. It took too long and so i cut it to 5 and rerun as shown here.
+
+The reason i am choosing to pick Random Forest is that test data set is not really needed given the nature of that algorithm. Every classification tree planted sets aside 33% of the data set in the sample space for test and preparation of the vote and finally the votes of classifications are looked at by the finalizer to arrive pick the best model. Secondly, considering the clean up, pre-processing we already did, we have a good chance of coming up with an accurate model. Once built, i use this model against the test data set for validation.
+
+I have tried running it outside of RMD and it takes quite a bit of time. Ideall, i would like to pass trControl and grid parameters with more values, but i may never shut my poor laptop down. So, i stay with this one run (which has to be re-run just to create the HTML)
+
+```{r echo=TRUE}
+fit <-train(classe~.,data=training,method="rf", trControl=trainControl(method="cv",number=5),prox=TRUE,allowParallel=TRUE)
+print(fit$finalModel)
+importance(fit$finalModel)
+varImpPlot(fit$finalModel)
+```
+
+
+The OOB estimate of error rate is quite low at 0.14%. Considering the class error rates on the right most column being such low number,
+it appears that the model is a good fit. For that low an OOB, i would expect a 99.8% accuracy in the prediction results.
+
+**Testing Model with the test set**
+
+In order to run against the test set, since we had hour of the day as a factor in training as opposed to actual time stamps, we factorize that predictor as in training before running the predict call. The run of the fit model against the test set gave 20/20 correct answers.
+
+```{r echo=TRUE}
+test$cvtd_timestamp = strptime(test$cvtd_timestamp, '%d/%m/%Y %H:%M')
+test$cvtd_timestamp = hour(test$cvtd_timestamp)
+test$cvtd_timestamp = as.factor(test$cvtd_timestamp)
+pred = predict(fit, test)
+pred
+```
+
+I am more than happy with this result even if i didnt have the try to tweak/tune the control/grid params for a longer run. It probably is not worth the push as one may only enter the domain of overfitting!
+
